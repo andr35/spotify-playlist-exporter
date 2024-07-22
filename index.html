@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spotify Playlist Exporter</title>
+  </head>
+  <body
+    style="
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    "
+  >
+    <input type="text" id="clientID" placeholder="Type the clientID" />
+
+    <button
+      id="exportBtn"
+      style="width: 124px; height: 96px; font-size: 24px; text-align: center"
+    >
+      Login & Export
+    </button>
+
+    <div
+      id="playlists"
+      style="
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+      "
+    ></div>
+
+    <script>
+      async function main() {
+        document.getElementById("exportBtn").onclick = async () => {
+          redirectToAuthCodeFlow(getClientId());
+        };
+
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get("code");
+
+        if (code) {
+          const accessToken = await getAccessToken(getClientId(), code);
+          const playlists = await fetchPlaylists(accessToken);
+
+          const playlistsElem = document.getElementById("playlists");
+          for (const playlist of playlists) {
+            const btn = document.createElement("button");
+            playlistsElem.appendChild(btn);
+
+            btn.innerText = playlist.name;
+            btn.onclick = async () => {
+              downloadPlaylist(accessToken, playlist);
+            };
+          }
+        }
+      }
+
+      function getClientId() {
+        const inputValue = document.getElementById("clientID").value;
+
+        if (inputValue) {
+          localStorage.setItem("spotify-client-id", inputValue);
+          return inputValue;
+        }
+
+        return localStorage.getItem("spotify-client-id");
+      }
+
+      async function redirectToAuthCodeFlow(clientId) {
+        const verifier = generateCodeVerifier(128);
+        const challenge = await generateCodeChallenge(verifier);
+
+        localStorage.setItem("verifier", verifier);
+
+        const params = new URLSearchParams();
+        params.append("client_id", clientId);
+        params.append("response_type", "code");
+        params.append("redirect_uri", "http://localhost:3000");
+        params.append("scope", "playlist-read-private");
+        params.append("code_challenge_method", "S256");
+        params.append("code_challenge", challenge);
+
+        document.location = `https://accounts.spotify.com/authorize?${params.toString()}`;
+      }
+
+      function generateCodeVerifier(length) {
+        let text = "";
+        let possible =
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+        for (let i = 0; i < length; i++) {
+          text += possible.charAt(Math.floor(Math.random() * possible.length));
+        }
+        return text;
+      }
+
+      async function generateCodeChallenge(codeVerifier) {
+        const data = new TextEncoder().encode(codeVerifier);
+        const digest = await window.crypto.subtle.digest("SHA-256", data);
+        return btoa(
+          String.fromCharCode.apply(null, [...new Uint8Array(digest)])
+        )
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+      }
+
+      async function getAccessToken(clientId, code) {
+        const verifier = localStorage.getItem("verifier");
+
+        const params = new URLSearchParams();
+        params.append("client_id", clientId);
+        params.append("grant_type", "authorization_code");
+        params.append("code", code);
+        params.append("redirect_uri", "http://localhost:3000");
+        params.append("code_verifier", verifier);
+
+        console.log("Getting token...");
+        const result = await fetch("https://accounts.spotify.com/api/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params,
+        });
+
+        const { access_token } = await result.json();
+        return access_token;
+      }
+
+      async function fetchPlaylists(accessToken) {
+        console.log("> Getting playlists...");
+        const res = await fetch("https://api.spotify.com/v1/me/playlists", {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+
+        return (await res.json()).items;
+      }
+
+      async function downloadPlaylist(accessToken, playlist) {
+        console.log(`Downloading "${playlist.name}"...`);
+
+        console.log(playlist);
+
+        const res = await fetch(playlist.href, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        const resData = await res.json();
+
+        const output = {
+          name: playlist.name,
+          tracks: resData.tracks.items.map((t) => ({
+            artist: t.track.artists[0].name,
+            title: t.track.name,
+            album: t.track.album.name,
+            date: new Date(t.track.album.release_date).getFullYear(),
+          })),
+        };
+
+        console.log(output);
+        download(output, output.name);
+      }
+
+      function download(exportObj, exportName) {
+        var dataStr =
+          "data:text/json;charset=utf-8," +
+          encodeURIComponent(JSON.stringify(exportObj, null, 2));
+        var downloadAnchorNode = document.createElement("a");
+        downloadAnchorNode.setAttribute("href", dataStr);
+        downloadAnchorNode.setAttribute("download", exportName + ".json");
+        document.body.appendChild(downloadAnchorNode); // required for firefox
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+      }
+
+      main();
+    </script>
+  </body>
+</html>
